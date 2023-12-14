@@ -830,6 +830,185 @@ int getDefIOPins(defrCallbackType_e type, defiPin *pin, defiUserData data) {
 
 }
 
+void addNetGeometry(defiNet *net, PhyDB *phy_db_ptr, bool specialnet) {
+  // #define BEN_DEBUG
+
+  double ext_length = specialnet ? 0 : -1;
+
+  
+  #ifdef BEN_DEBUG
+    std::cout << "START OF NET (" << net->name() << ")" << std::endl;
+  #endif
+  // iterate over the wires of the net, initialize net segment numberer
+
+  int net_segment_id = 0;
+  for (int i = 0; i < net->numWires(); i++) {
+    defiWire *wire = net->wire(i);
+
+    #ifdef BEN_DEBUG
+      std::cout << "    START OF WIRE #" << i << std::endl;
+    #endif
+
+    // iterate over the paths of the wire
+    for (int j = 0; j < wire->numPaths(); j++) {
+      #ifdef BEN_DEBUG
+        std::cout << "        START OF PATH #" << j << std::endl;
+      #endif
+
+      // initialize path traversal, centerline vector, layer tracker
+      defiPath *path = wire->path(j);
+      path->initTraverse();
+
+      const char *curr_layer = nullptr;
+      double curr_wire_width = -1;
+      std::vector<Point2D<double>> centerline;
+
+      // traverse path
+      for (int t = path->next(); t != DEFIPATH_DONE; t = path->next()) {
+        switch(t) {
+          case DEFIPATH_LAYER: {
+
+            // if there was a previous layer in the path register that geometry
+            if (curr_layer != NULL) {
+              phy_db_ptr->AddWireSegmentGeometryFromCenterline(centerline, curr_layer, net_segment_id, net->name(), ext_length, curr_wire_width);
+              ext_length = specialnet ? 0 : -1; // reset ext_length
+              curr_wire_width = -1; // reset wire width
+            }
+            curr_layer = path->getLayer();
+            #ifdef BEN_DEBUG
+              std::cout << "            LAYER: " << curr_layer << std::endl;
+            #endif
+            break;
+          }
+          case DEFIPATH_VIA: {
+            const char *via_name = path->getVia();
+            LefVia *lef_via_ptr = phy_db_ptr->GetLefViaPtr(via_name);
+            DefVia *def_via_ptr = phy_db_ptr->GetDefViaPtr(via_name);
+            if (centerline.size() != 1) {
+              std::cout << "strange! expected one point in centerline prior to via..." << std::endl;
+            }
+            if (lef_via_ptr && def_via_ptr) {
+              std::cout << "problem! this should never happen: via defined in both lef and def, exiting" << std::endl;
+              exit(1);
+            }
+            else if (lef_via_ptr) {
+              phy_db_ptr->AddLefViaGeometry(lef_via_ptr, net_segment_id, net->name(), centerline[0]);
+            }
+            else if (def_via_ptr) {
+              phy_db_ptr->AddDefViaGeometry(def_via_ptr, net_segment_id, net->name(), centerline[0]);
+            } else {
+              std::cout << "problem! unrecognized via name: (" << via_name << ")" << std::endl;
+              exit(1);
+            }
+            centerline.clear();
+
+            #ifdef BEN_DEBUG 
+              std::cout << "            VIA: " << via_name << std::endl;
+            #endif
+            break;
+          }
+          case DEFIPATH_WIDTH: {
+            int w = path->getWidth();
+            curr_wire_width = w;
+            #ifdef BEN_DEBUG
+              std::cout << "            WIDTH: " << w << std::endl;
+            #endif
+            break;
+          }
+          case DEFIPATH_POINT: {
+            int x, y;
+            path->getPoint(&x, &y);
+            #ifdef BEN_DEBUG
+              std::cout << "            POINT: (" << x << ", " << y << ")" << std::endl;
+            #endif
+            centerline.push_back(Point2D<double>(x, y));
+            
+            
+            break;
+          }
+          case DEFIPATH_FLUSHPOINT:
+            #ifdef BEN_DEBUG
+              int x, y, e;
+              path->getFlushPoint(&x, &y, &e);
+              #ifdef BEN_DEBUG
+                std::cout << "            FLUSHPOINT: (" << x << ", " << y << ", " << e << ")" << std::endl;
+              #endif
+              ext_length = e;
+              centerline.push_back(Point2D<double>(x, y));
+            #endif
+            break;
+          case DEFIPATH_TAPER:
+            #ifdef BEN_DEBUG
+              std::cout << "            taper" << std::endl;
+            #endif
+            break;
+          case DEFIPATH_TAPERRULE:
+            #ifdef BEN_DEBUG
+              std::cout << "            taperrule" << std::endl;
+            #endif
+            break;
+          case DEFIPATH_SHAPE:
+            #ifdef BEN_DEBUG
+              std::cout << "            shape " << path->getShape() << std::endl;
+            #endif
+            break;
+          case DEFIPATH_STYLE:
+            #ifdef BEN_DEBUG  
+              std::cout << "            style" << std::endl;
+            #endif
+            break;
+          case DEFIPATH_VIAROTATION:
+            #ifdef BEN_DEBUG
+              std::cout << "            viarotation" << std::endl;
+            #endif
+            break;
+          case DEFIPATH_RECT: {
+            int dx1, dy1, dx2, dy2;
+            path->getViaRect(&dx1, &dy1, &dx2, &dy2);
+            if (centerline.size() != 1) {
+              std::cout << "strange! expected one point in centerline prior to rect..." << std::endl;
+            }
+
+            Rect2D<double> rect(centerline[0].x + dx1, centerline[0].y + dy1, centerline[0].x + dx2, centerline[0].y + dy2);
+            phy_db_ptr->AddRectGeometry(curr_layer, net_segment_id, net->name(), rect);
+            centerline.clear();
+            #ifdef BEN_DEBUG
+              std::cout << "            VIA RECT: (deltax1=" << dx1 << " deltay1=" << dy1 << " deltax2=" << dx2 << " deltay2=" << dy2 << ")" << std::endl;
+            #endif
+            break;
+          }
+          case DEFIPATH_VIADATA:
+            break;
+          case DEFIPATH_VIRTUALPOINT:
+            break;
+          case DEFIPATH_MASK:
+            break;
+          case DEFIPATH_VIAMASK:
+            break;
+          default: {
+            std::cout << "unrecognized path element type: " << t << ", exiting" << std::endl;
+          }
+        }
+      }
+      // at end of path register the geometry of current segment, clear layer
+      if (!centerline.empty()) phy_db_ptr->AddWireSegmentGeometryFromCenterline(centerline, curr_layer, net_segment_id, net->name(), ext_length, curr_wire_width);
+      ext_length = specialnet ? 0 : -1;
+      curr_wire_width = -1; // reseting wire width
+      curr_layer = nullptr;
+
+      #ifdef BEN_DEBUG
+        std::cout << "        END OF PATH #" << j << std::endl;
+      #endif
+    }
+    #ifdef BEN_DEBUG
+      std::cout << "    END OF WIRE #" << i << std::endl;
+    #endif
+  }
+  #ifdef BEN_DEBUG
+    std::cout << "END OF NET" << std::endl;
+  #endif
+}
+
 int getDefNets(defrCallbackType_e type, defiNet *net, defiUserData data) {
   if (type != defrNetCbkType) {
     std::cout << "Type is not defrNetCbkType!" << std::endl;
@@ -849,6 +1028,8 @@ int getDefNets(defrCallbackType_e type, defiNet *net, defiUserData data) {
       phy_db_ptr->AddCompPinToNet(comp_name, pin_name, net_name);
     }
   }
+
+  addNetGeometry(net, phy_db_ptr, false);
 
   return 0;
 }
@@ -949,6 +1130,8 @@ int getDefSNets(defrCallbackType_e type, defiNet *net, defiUserData data) {
     } // end_ path
   } // end_ wire
 
+  addNetGeometry(net, phy_db_ptr, true);
+
 
   return 0;
 }
@@ -1038,6 +1221,7 @@ int getDefVias(defrCallbackType_e type, defiVia *via, defiUserData data) {
       Rect2DLayer<int> tmpRect2DLayer;
       std::string layer_name(layer_name_);
       tmpRect2DLayer.Set(layer_name, xl, yl, xh, yh);
+      last_via.rect2d_layers.push_back(tmpRect2DLayer);
     }
     //TODO:
   }
@@ -1202,6 +1386,7 @@ int getDefDivider(
   return 0;
 }
 
+
 void Si2ReadLef(PhyDB *phy_db_ptr, std::string const &lef_file_name) {
   FILE *f;
   int res;
@@ -1277,11 +1462,11 @@ void Si2ReadDef(PhyDB *phy_db_ptr, std::string const &def_file_name) {
   defrSetViaCbk(getDefVias);
   defrSetGcellGridCbk(getDefGcellGrid);
 
+
   if ((f = fopen(def_file_name.c_str(), "r")) == 0) {
     std::cout << "Couldn't open def file" << std::endl;
     exit(2);
   }
-
   res = defrRead(f, def_file_name.c_str(), (defiUserData) phy_db_ptr, 1);
   if (res != 0) {
     std::cout << "DEF parser returns an error!" << std::endl;

@@ -29,6 +29,8 @@
 #include "phydb/timing/techconfigparser.h"
 #include "lefdefparser.h"
 
+#include "geometry.h"
+
 namespace phydb {
 
 PhyDB::~PhyDB() = default;
@@ -47,6 +49,14 @@ Design *PhyDB::GetDesignPtr() {
 
 Design &PhyDB::design() {
   return design_;
+}
+
+Geometry *PhyDB::GetGeometryPtr() {
+  return &geometry_;
+}
+
+Geometry &PhyDB::geometry() {
+  return geometry_;
 }
 
 void PhyDB::SetLefVersion(double version) {
@@ -472,6 +482,232 @@ SNet *PhyDB::GetSNet(std::string const &net_name) {
 
 std::vector<SNet> &PhyDB::GetSNetRef() {
   return design_.GetSNetRef();
+}
+
+void PhyDB::AddLefViaGeometry(LefVia *via_ptr, int &segment_id, std::string net_name, Point2D<double> offset) {
+  std::vector<LayerRect> &layer_rects = via_ptr->GetLayerRectsRef();
+  WireSegment *prev = nullptr;
+  for (LayerRect layer_rect : layer_rects) {
+    std::string layer_name = layer_rect.layer_name_;
+    std::vector<Rect2D<double>> rects = layer_rect.GetRects();
+    for (Rect2D<double> rect : rects) {
+      rect.ll.x *= tech_.GetDatabaseMicron();
+      rect.ll.y *= tech_.GetDatabaseMicron();
+      rect.ur.x *= tech_.GetDatabaseMicron();
+      rect.ur.y *= tech_.GetDatabaseMicron();
+      rect.ll.x += offset.x;
+      rect.ll.y += offset.y;
+      rect.ur.x += offset.x;
+      rect.ur.y += offset.y;
+      Point2D<double> center((rect.ll.x + rect.ur.x) / 2, (rect.ll.y + rect.ur.y) / 2); 
+
+      // std::cout << net_name << "- LEFVIA RECT: LL=(" << via_rect.ll.x << ", " << via_rect.ll.y << ") ; UR=(" << via_rect.ur.x << ", " << via_rect.ur.y << ")" << std::endl;
+      
+      WireSegment w(rect, net_name, layer_name, segment_id++, center, center);
+      if (prev) {
+        w.addVerticalConnection(prev);
+      }
+      prev = AddWireSegment(w);
+    }
+  }
+}
+
+void PhyDB::AddDefViaGeometry(DefVia *via_ptr, int &segment_id, std::string net_name, Point2D<double> offset) {
+  WireSegment *prev = nullptr;
+  if (via_ptr->rect2d_layers.size() > 0) {
+    for (Rect2DLayer<int> rect_layer : via_ptr->rect2d_layers) {
+        std::string layer_name = rect_layer.layer;
+
+        Rect2D<double> via_rect(static_cast<double>(rect_layer.ll.x) + offset.x,
+                              static_cast<double>(rect_layer.ll.y) + offset.y,
+                              static_cast<double>(rect_layer.ur.x) + offset.x,
+                              static_cast<double>(rect_layer.ur.y) + offset.y);
+
+        // std::cout << net_name << "- VIA RECT: LL=(" << via_rect.ll.x << ", " << via_rect.ll.y << ") ; UR=(" << via_rect.ur.x << ", " << via_rect.ur.y << ")" << std::endl;
+        Point2D<double> center((via_rect.ll.x + via_rect.ur.x) / 2, (via_rect.ll.y + via_rect.ur.y) / 2); 
+        WireSegment w(via_rect, net_name, layer_name, segment_id++, center, center);
+        if (prev) {
+          w.addVerticalConnection(prev);
+        }
+        prev = AddWireSegment(w);
+    }
+  } else {
+    std::string bot_layer = via_ptr->layers_[0];
+    std::string cut_layer = via_ptr->layers_[1];
+    std::string top_layer = via_ptr->layers_[2];
+
+    std::cout << via_ptr->name_ << " | " << via_ptr->cut_size_.x << " | " << via_ptr->cut_size_.y<< std::endl;
+
+    Rect2D<double> cut_rect(-static_cast<double>(via_ptr->cut_size_.x) / 2 + offset.x,
+                            -static_cast<double>(via_ptr->cut_size_.y) / 2 + offset.y,
+                            static_cast<double>(via_ptr->cut_size_.x) / 2 + offset.x,
+                            static_cast<double>(via_ptr->cut_size_.y) / 2 + offset.y);
+
+    Rect2D<double> bot_rect(cut_rect);
+    bot_rect.ll.x += static_cast<double>(via_ptr->bot_offset_.x) - static_cast<double>(via_ptr->bot_enc_.x);
+    bot_rect.ur.x += static_cast<double>(via_ptr->bot_offset_.x) + static_cast<double>(via_ptr->bot_enc_.x);
+    bot_rect.ll.y += static_cast<double>(via_ptr->bot_offset_.y) - static_cast<double>(via_ptr->bot_enc_.y);
+    bot_rect.ur.y += static_cast<double>(via_ptr->bot_offset_.y) + static_cast<double>(via_ptr->bot_enc_.y);
+
+    Rect2D<double> top_rect(cut_rect);
+    top_rect.ll.x += static_cast<double>(via_ptr->top_offset_.x) - static_cast<double>(via_ptr->top_enc_.x);
+    top_rect.ur.x += static_cast<double>(via_ptr->top_offset_.x) + static_cast<double>(via_ptr->top_enc_.x);
+    top_rect.ll.y += static_cast<double>(via_ptr->top_offset_.y) - static_cast<double>(via_ptr->top_enc_.y);
+    top_rect.ur.y += static_cast<double>(via_ptr->top_offset_.y) + static_cast<double>(via_ptr->top_enc_.y);
+
+    Point2D<double> bot_center((bot_rect.ll.x + bot_rect.ur.x) / 2, (bot_rect.ll.y + bot_rect.ur.y) / 2); 
+    Point2D<double> cut_center((cut_rect.ll.x + cut_rect.ur.x) / 2, (cut_rect.ll.y + bot_rect.ur.y) / 2); 
+    Point2D<double> top_center((top_rect.ll.x + top_rect.ur.x) / 2, (top_rect.ll.y + top_rect.ur.y) / 2); 
+
+    WireSegment w1(bot_rect, net_name, bot_layer, segment_id++, bot_center, bot_center);
+    if (prev) {
+      w1.addVerticalConnection(prev);
+    }
+    prev = AddWireSegment(w1);
+
+    WireSegment w2(cut_rect, net_name, bot_layer, segment_id++, cut_center, cut_center);
+    if (prev) {
+      w2.addVerticalConnection(prev);
+    }
+    prev = AddWireSegment(w2);
+
+    WireSegment w3(top_rect, net_name, top_layer, segment_id++, top_center, top_center);
+    if (prev) {
+      w3.addVerticalConnection(prev);
+    }
+    prev = AddWireSegment(w3);
+  }
+  return;
+}
+
+void PhyDB::AddRectGeometry(std::string layer_name, int &net_segment_id, std::string net_name, Rect2D<double> rect) {
+    Point2D<double> center((rect.ll.x + rect.ur.x) / 2, (rect.ll.y + rect.ur.y) / 2); 
+    WireSegment w(rect, net_name, layer_name, net_segment_id++, center, center);
+    AddWireSegment(w);
+}
+
+WireSegment *PhyDB::AddWireSegment(WireSegment &seg) { 
+  return geometry_.addWireSegment(seg);
+}
+
+/* partitions centerline path of given net on given layer into rectangles + adds to data structure */
+void PhyDB::AddWireSegmentGeometryFromCenterline(std::vector<Point2D<double>> &centerline, std::string layer_name, int &segment_id, std::string net_name, double ext_length, double width) {
+  if (centerline.empty()) {
+    std::cout << "unexpectedly empty centerline vector... ignoring" << std::endl;
+    return;
+  }
+
+  Layer *layer_ptr = GetLayerPtr(layer_name);
+  double wire_width = width >= 0 ? width : layer_ptr->GetWidth() * tech_.GetDatabaseMicron();
+  // std::cout << "WIREWIDTH " << wire_width << std::endl;
+
+  // start overshoot length is overshoot length for start of centerline, depends on snet vs net
+  double overshoot_length = ext_length >= 0 ? ext_length : wire_width / 2;
+
+  for (unsigned long i = 0; i < centerline.size() - 1; i++) {
+
+    // get relevant point pair
+    Point2D<double> p1 = centerline[i];
+    Point2D<double> p2 = centerline[i + 1];
+
+    // make sure were moving along x or y axis
+    if ((p1.x != p2.x) == (p1.y != p2.y)) {
+      std::cout << "PROBLEM: NON ORTHOGONAL ROUTING NOT SUPPORTED" << std::endl;
+      exit(1);
+    }
+
+    // end overshoot length is overshoot length for end of segment, depends on whether pt is last + snet vs net
+    double end_overshoot_length = (i == centerline.size() - 2 ? overshoot_length : wire_width / 2);
+
+    Point2D<double> ll, ur; // points for lower left and upper right corners of rectangle
+
+    // aux vars for resistance generation
+    Point2D<double> starting_coordinate;
+    WireSegment *prev = nullptr;
+
+    // special treatment if p1 is first point, no previous overlapping rectangle
+    if (i == 0) {
+      starting_coordinate = p1;
+
+      // if wire is going right or up we get lower left from p1, upper right from p2;
+      // if down or left we get ll from p2, ur from p1
+      if (p2.x > p1.x) { 
+        ll.x = p1.x - overshoot_length;
+        ll.y = p1.y - wire_width / 2;
+
+        ur.x = p2.x + end_overshoot_length;
+        ur.y = p2.y + wire_width / 2;
+      } else if (p2.y > p1.y) {
+        ll.x = p1.x - wire_width / 2;
+        ll.y = p1.y - overshoot_length;
+
+        ur.x = p2.x + wire_width / 2;
+        ur.y = p2.y + end_overshoot_length;
+      } else if (p2.x < p1.x) {
+        ur.x = p1.x + overshoot_length;
+        ur.y = p1.y + wire_width / 2;
+
+        ll.x = p2.x - end_overshoot_length;
+        ll.y = p2.y - wire_width / 2;
+      }
+      // if wire going left or down we swap these
+      else {
+        ur.x = p1.x + wire_width / 2;
+        ur.y = p1.y + overshoot_length;
+
+        ll.x = p2.x - wire_width / 2;
+        ll.y = p2.y - end_overshoot_length;
+      }
+    } else {
+      if (p2.x > p1.x) { // going right, get lower left corner
+        ll.x = p1.x + wire_width / 2;
+        ll.y = p1.y - wire_width / 2;
+
+        ur.x = p2.x + end_overshoot_length;
+        ur.y = p2.y + wire_width / 2;
+
+        starting_coordinate = Point2D<double>(ll.x, (ll.y + ur.y) / 2);
+      }
+      else if (p2.y > p1.y) { // going up, get lower left corner
+        ll.x = p1.x - wire_width / 2;
+        ll.y = p1.y + wire_width / 2;
+
+        ur.x = p2.x + wire_width / 2;
+        ur.y = p2.y + end_overshoot_length;
+
+        starting_coordinate = Point2D<double>((ll.x + ur.x) / 2, ll.y);
+      }
+      else if (p2.x < p1.x) { // going left, get upper right corner
+        ur.x = p1.x - wire_width / 2;
+        ur.y = p1.y + wire_width / 2;
+
+        ll.x = p2.x - end_overshoot_length;
+        ll.y = p2.y - wire_width / 2;
+
+        starting_coordinate = Point2D<double>(ur.x, (ll.y + ur.y) / 2);
+      }
+      else if (p2.y < p1.y) { // going down, get upper right corner
+        ur.x = p1.x + wire_width / 2;
+        ur.y = p1.y - wire_width / 2;
+
+        ll.x = p2.x - wire_width / 2;
+        ll.y = p2.y - end_overshoot_length;
+
+        starting_coordinate = Point2D<double>((ll.x + ur.x) / 2, ur.y);
+      }
+    }
+
+    // at this point in the code ur and ll are correct, create + register wire segment
+    WireSegment w(Rect2D<double>(ll, ur), net_name, layer_name, segment_id++, starting_coordinate, p2);
+    if (prev) {
+      w.addHorizontalConnection(prev);
+    }
+
+    prev = AddWireSegment(w);
+
+  }
+
+  centerline.clear();
 }
 
 void PhyDB::SetNwellLayer(

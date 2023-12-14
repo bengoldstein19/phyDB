@@ -26,6 +26,7 @@
 
 #include "datatype.h"
 #include "design.h"
+#include "geometry.h"
 #include "phydb/timing/actphydbtimingapi.h"
 #include "tech.h"
 
@@ -40,6 +41,9 @@ class PhyDB {
   Tech &tech();
   Design *GetDesignPtr();
   Design &design();
+  Geometry *GetGeometryPtr();
+  Geometry &geometry();
+
 
   /************************************************
   * The following APIs are for information in LEF
@@ -190,6 +194,23 @@ class PhyDB {
   SNet *GetSNet(std::string const &net_name);
   std::vector<SNet> &GetSNetRef();
 
+  void AddWireSegmentGeometryFromCenterline(
+    std::vector<Point2D<double>> &centerline,
+    std::string layer_name,
+    int &segment_id,
+    std::string net_name,
+    double ext_length = -1,
+    double width = -1
+  );
+
+  WireSegment *AddWireSegment(WireSegment &seg);
+
+  void AddLefViaGeometry(LefVia *via_ptr, int &segment_id, std::string net_name, Point2D<double> offset);
+
+  void AddDefViaGeometry(DefVia *via_ptr, int &segment_id, std::string net_name, Point2D<double> offset);
+
+  void AddRectGeometry(std::string layer_name, int &net_segment_id, std::string net_name, Rect2D<double> rect);
+
   /************************************************
   * The following APIs are for setting up callback functions for timing-driven flow
   * and pointers of parasitic manager, cell libs, adaptor
@@ -331,6 +352,7 @@ class PhyDB {
  private:
   Tech tech_;
   Design design_;
+  Geometry geometry_;
   ActPhyDBTimingAPI timing_api_;
 
 #if PHYDB_USE_GALOIS

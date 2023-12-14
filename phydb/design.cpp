@@ -209,7 +209,7 @@ int Design::GetComponentId(std::string const &comp_name) {
 }
 
 bool Design::IsDefViaExisting(std::string const &name) {
-  return def_via_2_id_.find(name) != def_via_2_id_.end();
+  return via_2_id_.find(name) != via_2_id_.end(); // this was a bug before i think...
 }
 
 DefVia *Design::AddDefVia(std::string const &via_name) {
