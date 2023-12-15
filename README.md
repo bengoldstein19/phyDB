@@ -1,3 +1,12 @@
+# Modeling VLSI Nets With RC Networks
+- Added geometric data structure to store rectangular WireSegment's
+- RC generation pipeline from rectangular segments
+- Small example that uses pretty much all of functionality: net delayblk3.d[6].ix1.Y.
+    - Example LEF, DEF, and test run files are included in test/
+    - txt file shown for example input/output for the above net
+- Usage: read in lef/def, call "GenerateRCNetwork" on phydb object to store the resistors/capacitors, call "PrintRCNetworK" to dump
+
+
 # PhyDB
 [![CircleCI](https://circleci.com/gh/asyncvlsi/phyDB.svg?style=svg)](https://circleci.com/gh/asyncvlsi/phyDB)
 
