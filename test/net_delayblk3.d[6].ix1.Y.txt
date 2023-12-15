@@ -1,0 +1,35 @@
+ROUTING STATEMENT
+
+- delayblk3.d[6].ix1.Y ( delayblk3_ad_56_6_ainx2 A ) ( delayblk3_ad_56_6_aix1 Y ) 
+  + ROUTED met1 ( 12675 11775 ) ( 12750 11775 )
+    NEW met1 ( 12675 11775 ) ( 12675 12675 )
+    NEW met1 ( 12675 12675 ) ( 13950 12675 )
+    NEW met1 ( 13950 12675 ) ( 13950 13575 )
+    NEW met1 ( 13950 13575 ) ( 15150 13575 )
+    NEW li ( 12750 11775 ) mcon_C
+    NEW li ( 15150 13575 ) mcon_C
+;
+
+PROGRAM OUTPUT
+
+Resistor<node1='delayblk3.d[6].ix1.Y{0}', node2='delayblk3.d[6].ix1.Y{1}', length=75, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:0' point1=(12675, 11775), point2=(12750, 11775)>
+Resistor<node1='delayblk3.d[6].ix1.Y{0}', node2='delayblk3.d[6].ix1.Y{20}', length=75, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:0' point1=(12675, 11775), point2=(12675, 11850)>
+Resistor<node1='delayblk3.d[6].ix1.Y{3}', node2='delayblk3.d[6].ix1.Y{21}', length=75, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:1' point1=(12675, 12675), point2=(12750, 12675)>
+Resistor<node1='delayblk3.d[6].ix1.Y{6}', node2='delayblk3.d[6].ix1.Y{7}', length=900, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:3' point1=(13950, 12675), point2=(13950, 13575)>
+Resistor<node1='delayblk3.d[6].ix1.Y{7}', node2='delayblk3.d[6].ix1.Y{23}', length=75, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:3' point1=(13950, 13575), point2=(14025, 13575)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{10}', upper-node='delayblk3.d[6].ix1.Y{13}', cross-sectional-area=90000, layer=mcon, segment-id='delayblk3.d[6].ix1.Y:6' point=(12750, 11775)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{12}', upper-node='delayblk3.d[6].ix1.Y{10}', cross-sectional-area=90000, layer=li, segment-id='delayblk3.d[6].ix1.Y:5' point=(12750, 11775)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{13}', upper-node='delayblk3.d[6].ix1.Y{1}', cross-sectional-area=202500, layer=met1, segment-id='delayblk3.d[6].ix1.Y:7' point=(12750, 11775)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{15}', upper-node='delayblk3.d[6].ix1.Y{18}', cross-sectional-area=90000, layer=mcon, segment-id='delayblk3.d[6].ix1.Y:9' point=(15150, 13575)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{17}', upper-node='delayblk3.d[6].ix1.Y{15}', cross-sectional-area=90000, layer=li, segment-id='delayblk3.d[6].ix1.Y:8' point=(15150, 13575)>
+VerticalResistor<lower-node='delayblk3.d[6].ix1.Y{18}', upper-node='delayblk3.d[6].ix1.Y{9}', cross-sectional-area=202500, layer=met1, segment-id='delayblk3.d[6].ix1.Y:10' point=(15150, 13575)>
+Resistor<node1='delayblk3.d[6].ix1.Y{20}', node2='delayblk3.d[6].ix1.Y{3}', length=825, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:1' point1=(12675, 11850), point2=(12675, 12675)>
+Resistor<node1='delayblk3.d[6].ix1.Y{21}', node2='delayblk3.d[6].ix1.Y{24}', length=562.5, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:2' point1=(12750, 12675), point2=(13312.5, 12675)>
+Resistor<node1='delayblk3.d[6].ix1.Y{22}', node2='delayblk3.d[6].ix1.Y{6}', length=75, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:3' point1=(13875, 12675), point2=(13950, 12675)>
+Resistor<node1='delayblk3.d[6].ix1.Y{23}', node2='delayblk3.d[6].ix1.Y{25}', length=600, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:4' point1=(14025, 13575), point2=(14625, 13575)>
+Resistor<node1='delayblk3.d[6].ix1.Y{24}', node2='delayblk3.d[6].ix1.Y{22}', length=562.5, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:2' point1=(13312.5, 12675), point2=(13875, 12675)>
+Resistor<node1='delayblk3.d[6].ix1.Y{25}', node2='delayblk3.d[6].ix1.Y{26}', length=225, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:4' point1=(14625, 13575), point2=(14850, 13575)>
+Resistor<node1='delayblk3.d[6].ix1.Y{26}', node2='delayblk3.d[6].ix1.Y{9}', length=300, width=150, layer=met1, segment-id='delayblk3.d[6].ix1.Y:4' point1=(14850, 13575), point2=(15150, 13575)>
+Capacitor<node1='delayblk3.d[6].ix1.Y{24}', node2='R.d[30]{26}', overlap-length=1125, distance=1350>
+Capacitor<node1='delayblk3.d[6].ix1.Y{25}', node2='R.d[30]{27}', overlap-length=1200, distance=450>
+Capacitor<node1='e2.e1[30]{43}', node2='delayblk3.d[6].ix1.Y{26}', overlap-length=750, distance=1650>
