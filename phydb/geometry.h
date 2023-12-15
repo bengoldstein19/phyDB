@@ -61,24 +61,13 @@ namespace phydb {
             void setP2(Point2D<double> pt) { _p2 = pt; }
 
             WireSegment *getOwnerSegment() { return _owner_segment; }
+            void setOwnerSegment(WireSegment *seg);
 
             Resistor(std::string node_id1, std::string node_id2, std::string material, double length = -1, double width = -1, double area = -1, Point2D<double> p1 = Point2D<double>(), Point2D<double> p2 = Point2D<double>(), WireSegment *owner_segment = nullptr);
 
             void print(std::ostream &s);
 
-            Resistor(const Resistor &res) :
-                _node_id1(res._node_id1),
-                _node_id2(res._node_id2),
-                _material(res._material),
-                _length(res._length),
-                _width(res._width),
-                _area(res._area),
-                _p1(res._p1),
-                _p2(res._p2),
-                _owner_segment(res._owner_segment)
-            {
-                std::cout << "this shouldnt happen i dont think..." << std::endl;
-            }
+            bool isVertical() { return _area > 0; }
 
         private:
             std::string _node_id1;
@@ -121,6 +110,8 @@ namespace phydb {
     class WireSegment {
         public:
             Rect2D<double> getRect() const { return _rect; }
+            void setRectLL(Point2D<double> ll) { _rect.ll = ll; }
+            void setRectUR(Point2D<double> ur) { _rect.ur = ur; }
             std::string getNetName() const { return _net_name; }
             std::string getLayerName() const { return _layer_name; }
             int getSegmentNumber() const { return _seg_num; }
@@ -132,9 +123,14 @@ namespace phydb {
             std::vector<WireSegment *> &getHorizontalConnections() { return _horizontal_connections; }
             std::vector<WireSegment *> &getVerticalConnections() { return _vertical_connections; }
             std::vector<Resistor *> &getResistors() { return _resistors; }
+            Resistor *getResistorByPoints(Point2D<double> p1, Point2D<double> p2);
 
             Point2D<double> getP1() { return _p1; }
             Point2D<double> getP2() { return _p2; }
+            void setP1(Point2D<double> p1) { _p1 = p1; }
+            void setP2(Point2D<double> p2) { _p1 = p2; }
+
+            bool hasVerticalConnections() { return _vertical_connections.size() > 0; }
             
 
             WireSegment(Rect2D<double> rect, std::string net_name, std::string layer_name, int seg_num, Point2D<double> p1 = Point2D<double>(), Point2D<double> p2 = Point2D<double>()) :
@@ -191,7 +187,8 @@ namespace phydb {
                 _default_partition_size(default_partition_size),
                 _num_bins_neighborhood(num_bins_neighborhood),
                 _net_to_num_nodes(std::map<std::string, unsigned long>()),
-                _resistor_network(std::vector<std::unique_ptr<Resistor>>())
+                _resistor_network(std::vector<std::unique_ptr<Resistor>>()),
+                _capacitor_network(std::vector<std::unique_ptr<Capacitor>>())
                 {}
 
             WireSegment *addSegmentToNet(std::string net,  WireSegment &seg);
@@ -204,6 +201,8 @@ namespace phydb {
             std::vector<WireSegment *> getOtherNetsNearbySegments(WireSegment *seg_ptr);
 
             std::string generateNodeID(std::string net);
+
+            void generateAndPrintResistors(std::ostream &s) { _populateResistorNetwork(); printRCNetwork(s); }
 
             void generateRCNetwork() { _populateResistorNetwork(); _populateCapacitanceNetwork(); }
 
@@ -221,8 +220,9 @@ namespace phydb {
             //resistor/capacitor generation helper functions
             void _populateResistorNetwork();
             void _populateCapacitanceNetwork();
-            void _handleContains(WireSegment *super_seg, WireSegment *sub_seg); // helper function to handle total segment containment
-            void _handleOverlap(WireSegment *seg1, WireSegment *seg2); // helper function to handle segment overlap
+            // void _handleContains(WireSegment *super_seg, WireSegment *sub_seg); // helper function to handle total segment containment
+            void _connectOverlappingSegments(WireSegment *seg1, WireSegment *seg2); // helper function to handle via segment overlap with planar segment
+            void _connectOverlappingPlanarSegs(WireSegment *seg1, WireSegment *seg2);
 
             std::string _splitResistorAtPt(Resistor *res, Point2D<double> sub_seg_pt); // handles splitting resistor, returns new node id
     };

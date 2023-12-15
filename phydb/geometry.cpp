@@ -82,6 +82,23 @@ namespace phydb {
         }
     }
 
+    void Resistor::setOwnerSegment(WireSegment *seg) {
+        if (_owner_segment) {
+            unsigned long i = 0;
+            std::vector<Resistor *> &resistors = _owner_segment->getResistors();
+            for (Resistor *res_ptr : resistors) {
+                if (res_ptr == this) {
+                    resistors.erase(resistors.begin() + i);
+                    break;
+                }
+                i++;
+            }
+
+            _owner_segment = seg;
+            _owner_segment->addResistor(this);
+        }
+    }
+
     void Capacitor::print(std::ostream &s) {
         s << "Capacitor<node1='"
           << _node_id1
@@ -93,6 +110,17 @@ namespace phydb {
           << _distance
           << ">"
           << std::endl;
+    }
+
+    Resistor *WireSegment::getResistorByPoints(Point2D<double> p1, Point2D<double> p2) {
+        for (Resistor *res : _resistors) {
+            Point2D<double> res_p1 = res->getP1();
+            Point2D<double> res_p2 = res->getP2();
+
+            if (res_p1.x == p1.x && res_p1.y == p1.y && res_p2.x == p2.x && res_p2.y == p2.y) return res;
+            if (res_p2.x == p1.x && res_p2.y == p1.y && res_p1.x == p2.x && res_p1.y == p2.y ) return res;
+        }
+        return nullptr;
     }
 
     void Geometry::_populateResistorNetwork() {
@@ -172,7 +200,7 @@ namespace phydb {
             }
         }
 
-        // (3) pairwise operations: combine vias into connected wires, non centerline connected wires. May not be dependable depending on net size
+        // (4) pairwise operation: handle overlapping segments from different paths by modifying boundaries and adding escape resistors
         for (std::map<std::string, std::vector<std::unique_ptr<WireSegment>>>::iterator it = _net_to_segs.begin() ; it != _net_to_segs.end() ; it++) {
             for (long i = 0; i < static_cast<long>(it->second.size()) - 1; i++) {
                 for (unsigned long j = i + 1; j < it->second.size(); j++) {
@@ -184,14 +212,30 @@ namespace phydb {
                     Rect2D<double> seg_rect = seg->getRect();
                     Rect2D<double> other_seg_rect = other_seg->getRect();
 
-                    if (!rectContains(seg_rect, other_seg_rect.ll) && !rectContains(seg_rect, other_seg_rect.ur)) continue; // skip pairs with no overlap
+                    // for overlapping rectangles find the closest resistor point pair and coalesce/combine with escape resistors
+                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll)) {
+                        _connectOverlappingPlanarSegs(seg, other_seg);
+                    }
+                }
+            }
+        }
 
-                    if (rectContains(seg_rect, other_seg_rect.ll) && rectContains(seg_rect, other_seg_rect.ur)) { // other seg contained within seg, coalesce
-                        _handleContains(seg, other_seg);
-                    } else if (rectContains(other_seg_rect, seg_rect.ll) && rectContains(other_seg_rect, seg_rect.ur)) {
-                        _handleContains(other_seg, seg);
-                    } else if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur)) {
-                        _handleOverlap(seg, other_seg);
+        
+        // (5) VIA pairwise operations: connect vias to layers as well as overlapping via rects
+        for (std::map<std::string, std::vector<std::unique_ptr<WireSegment>>>::iterator it = _net_to_segs.begin() ; it != _net_to_segs.end() ; it++) {
+            for (long i = 0; i < static_cast<long>(it->second.size()) - 1; i++) {
+                for (unsigned long j = i + 1; j < it->second.size(); j++) {
+                    WireSegment *seg = it->second[i].get();
+                    WireSegment *other_seg = it->second[j].get();
+
+                    if (seg->getLayerName() != other_seg->getLayerName()) continue; // only concerned with pairs that share layer
+
+                    Rect2D<double> seg_rect = seg->getRect();
+                    Rect2D<double> other_seg_rect = other_seg->getRect();
+
+                    // for overlapping rectangles find the closest resistor point pair and coalesce/combine with escape resistors
+                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll)) {
+                        _connectOverlappingSegments(seg, other_seg);
                     }
                 }
             }
@@ -209,6 +253,7 @@ namespace phydb {
     }
 
     std::string Geometry::_splitResistorAtPt(Resistor *res, Point2D<double> sub_seg_pt) {
+        if (res->getLength() < 0) std::cout << "SOMETHING WRONG: SPLITTING VERT RESISTOR" << std::endl;
         std::string new_id = generateNodeID(res->getNetName());
         Point2D<double> res_p1 = res->getP1();
         Point2D<double> res_p2 = res->getP2();
@@ -236,332 +281,508 @@ namespace phydb {
         return new_id;
     }
 
-    void Geometry::_handleOverlap(WireSegment *seg1, WireSegment *seg2) {
-        if (seg1->getResistors().size() == 0 || seg2->getResistors().size() == 0) return;
+    bool _connectViaToLayer(bool connect_to_top, Resistor *vert_r, Resistor *horiz_r) {
+        Point2D<double> horiz_r_p1 = horiz_r->getP1();
+        Point2D<double> horiz_r_p2 = horiz_r->getP2();
 
-        Point2D<double> seg1_p1 = seg1->getP1();
-        Point2D<double> seg1_p2 = seg1->getP2();
+        Point2D<double> vert_p = vert_r->getP1(); // will be same by defn of vert resistors
 
-        Point2D<double> seg2_p1 = seg2->getP1();
-        Point2D<double> seg2_p2 = seg2->getP2();
-
-        Rect2D<double> seg1_rect = seg1->getRect();
-        Rect2D<double> seg2_rect = seg2->getRect();
-
-        if (seg1_p1.x == seg1_p2.x && seg1_p1.x > std::min(seg2_p1.x, seg2_p2.x) && seg1_p1.x < std::max(seg2_p1.x, seg2_p2.x)) { // seg 1 vertical, cuts seg 2
-            for (Resistor *res : seg2->getResistors()) {
-                Point2D<double> res_p1 = res->getP1();
-                Point2D<double> res_p2 = res->getP2();
-
-                if (seg1_p1.x > std::min(res_p1.x, res_p2.x) && seg1_p1.x < std::max(res_p1.x, res_p2.x)) {
-                    Point2D<double> split_pt(seg1_p1.x, res_p1.y);
-                    std::string new_id = _splitResistorAtPt(res, split_pt);
-                    double escape_jct_y = seg1_p1.y > res_p1.y ? seg2_rect.ur.y : seg2_rect.ll.y;
-                    std::string escape_jct_id = generateNodeID(seg2->getNetName());
-
-                    std::unique_ptr<Resistor> seg2_r_escape(new Resistor(new_id,
-                        escape_jct_id,
-                        seg2->getLayerName(),
-                        abs(split_pt.y - escape_jct_y),
-                        seg1_rect.ur.x - seg1_rect.ll.x,
-                        -1,
-                        split_pt,
-                        Point2D<double>(split_pt.x, escape_jct_y),
-                        seg2
-                    ));
-                    _resistor_network.emplace_back(std::move(seg2_r_escape));
-
-                    double min_dst = -1;
-                    std::string  min_dst_id = "";
-                    Point2D<double> min_dst_pt;
-                    for (Resistor *seg1_r : seg1->getResistors()) {
-                        if (min_dst < 0 || abs(seg1_r->getP1().y - escape_jct_y) < min_dst) {
-                            min_dst = abs(seg1_r->getP1().y - escape_jct_y);
-                            min_dst_id = seg1_r->getNodeId1();
-                            min_dst_pt = seg1_r->getP1();
-                        }
-
-                        if (min_dst < 0 || abs(seg1_r->getP2().y - escape_jct_y) < min_dst) {
-                            min_dst = abs(seg1_r->getP2().y - escape_jct_y);
-                            min_dst_id = seg1_r->getNodeId1();
-                            min_dst_pt = seg1_r->getP2();
-                        }
-                    }
-                    if (min_dst < 0) return;
-
-                    std::unique_ptr<Resistor> seg1_r_escape(new Resistor(escape_jct_id,
-                        min_dst_id,
-                        seg1->getLayerName(),
-                        min_dst,
-                        seg1_rect.ur.x - seg1_rect.ll.x,
-                        -1,
-                        Point2D<double>(split_pt.x, escape_jct_y),
-                        min_dst_pt,
-                        seg1
-                    ));
-                    _resistor_network.emplace_back(std::move(seg1_r_escape));
-                    return;
-                }
+        if (horiz_r_p1.x == vert_p.x && horiz_r_p1.y == vert_p.y) {
+            if (connect_to_top) {
+                vert_r->setNodeId2(horiz_r->getNodeId1());
+            } else {
+                vert_r->setNodeId1(horiz_r->getNodeId1());
             }
-
-        } else if (seg1_p1.y == seg1_p2.y && seg1_p1.y > std::min(seg2_p1.y, seg2_p2.y) && seg1_p1.y < std::max(seg2_p1.y, seg2_p2.y)) { // seg 1 horizontal, cuts seg 2
-            for (Resistor *res : seg2->getResistors()) {
-                Point2D<double> res_p1 = res->getP1();
-                Point2D<double> res_p2 = res->getP2();
-
-                if (seg1_p1.y > std::min(res_p1.y, res_p2.y) && seg1_p1.y < std::max(res_p1.y, res_p2.y)) {
-                    Point2D<double> split_pt(res_p1.x, seg1_p1.y);
-                    std::string new_id = _splitResistorAtPt(res, split_pt);
-                    double escape_jct_x = seg1_p1.x > res_p1.x ? seg2_rect.ur.x : seg2_rect.ll.x;
-                    std::string escape_jct_id = generateNodeID(seg2->getNetName());
-
-                    std::unique_ptr<Resistor> seg2_r_escape(new Resistor(new_id,
-                        escape_jct_id,
-                        seg2->getLayerName(),
-                        abs(split_pt.x - escape_jct_x),
-                        seg1_rect.ur.y - seg1_rect.ll.y,
-                        -1,
-                        split_pt,
-                        Point2D<double>(escape_jct_x, split_pt.y),
-                        seg2
-                    ));
-                    _resistor_network.emplace_back(std::move(seg2_r_escape));
-
-                    double min_dst = -1;
-                    std::string  min_dst_id = "";
-                    Point2D<double> min_dst_pt;
-                    for (Resistor *seg1_r : seg1->getResistors()) {
-                        if (min_dst < 0 || abs(seg1_r->getP1().x - escape_jct_x) < min_dst) {
-                            min_dst = abs(seg1_r->getP1().x - escape_jct_x);
-                            min_dst_id = seg1_r->getNodeId1();
-                            min_dst_pt = seg1_r->getP1();
-                        }
-
-                        if (min_dst < 0 || abs(seg1_r->getP2().x - escape_jct_x) < min_dst) {
-                            min_dst = abs(seg1_r->getP2().x - escape_jct_x);
-                            min_dst_id = seg1_r->getNodeId1();
-                            min_dst_pt = seg1_r->getP2();
-                        }
-                    }
-                    if (min_dst < 0) return;
-
-                    std::unique_ptr<Resistor> seg1_r_escape(new Resistor(escape_jct_id,
-                        min_dst_id,
-                        seg1->getLayerName(),
-                        min_dst,
-                        seg1_rect.ur.y - seg1_rect.ll.y,
-                        -1,
-                        Point2D<double>(escape_jct_x, split_pt.y),
-                        min_dst_pt,
-                        seg1
-                    ));
-                    _resistor_network.emplace_back(std::move(seg1_r_escape));
-                    return;
-                }
+            return true;
+        } else if (horiz_r_p2.x == vert_p.x && horiz_r_p2.y == vert_p.y) {
+            if (connect_to_top) {
+                vert_r->setNodeId2(horiz_r->getNodeId2());
+            } else {
+                vert_r->setNodeId1(horiz_r->getNodeId2());
             }
-
-        } else if (seg2_p1.x == seg2_p2.x && seg2_p1.x > std::min(seg1_p1.x, seg1_p2.x) && seg2_p1.x < std::max(seg1_p1.x, seg1_p2.x)) { // seg 2 vertical, cuts seg 1
-            for (Resistor *res : seg1->getResistors()) {
-                Point2D<double> res_p1 = res->getP1();
-                Point2D<double> res_p2 = res->getP2();
-
-                if (seg2_p1.x > std::min(res_p1.x, res_p2.x) && seg2_p1.x < std::max(res_p1.x, res_p2.x)) {
-                    Point2D<double> split_pt(seg2_p1.x, res_p1.y);
-                    std::string new_id = _splitResistorAtPt(res, split_pt);
-                    double escape_jct_y = seg2_p1.y > res_p1.y ? seg1_rect.ur.y : seg1_rect.ll.y;
-                    std::string escape_jct_id = generateNodeID(seg1->getNetName());
-
-                    std::unique_ptr<Resistor> seg1_r_escape(new Resistor(new_id,
-                        escape_jct_id,
-                        seg1->getLayerName(),
-                        abs(split_pt.y - escape_jct_y),
-                        seg2_rect.ur.x - seg2_rect.ll.x,
-                        -1,
-                        split_pt,
-                        Point2D<double>(split_pt.x, escape_jct_y),
-                        seg1
-                    ));
-                    _resistor_network.emplace_back(std::move(seg1_r_escape));
-
-                    double min_dst = -1;
-                    std::string  min_dst_id = "";
-                    Point2D<double> min_dst_pt;
-                    for (Resistor *seg2_r : seg2->getResistors()) {
-                        if (min_dst < 0 || abs(seg2_r->getP1().y - escape_jct_y) < min_dst) {
-                            min_dst = abs(seg2_r->getP1().y - escape_jct_y);
-                            min_dst_id = seg2_r->getNodeId1();
-                            min_dst_pt = seg2_r->getP1();
-                        }
-
-                        if (min_dst < 0 || abs(seg2_r->getP2().y - escape_jct_y) < min_dst) {
-                            min_dst = abs(seg2_r->getP2().y - escape_jct_y);
-                            min_dst_id = seg2_r->getNodeId1();
-                            min_dst_pt = seg2_r->getP2();
-                        }
-                    }
-                    if (min_dst < 0) return;
-
-                    std::unique_ptr<Resistor> seg2_r_escape(new Resistor(escape_jct_id,
-                        min_dst_id,
-                        seg2->getLayerName(),
-                        min_dst,
-                        seg2_rect.ur.x - seg1_rect.ll.x,
-                        -1,
-                        Point2D<double>(split_pt.x, escape_jct_y),
-                        min_dst_pt,
-                        seg2
-                    ));
-                    _resistor_network.emplace_back(std::move(seg2_r_escape));
-                    return;
-                }
-            }
-
-        } else if (seg2_p1.y == seg2_p2.y && seg2_p1.y > std::min(seg1_p1.y, seg1_p2.y) && seg2_p1.y < std::max(seg1_p1.y, seg1_p2.y)) { // seg 1 vertical, cuts seg 2
-            for (Resistor *res : seg1->getResistors()) {
-                Point2D<double> res_p1 = res->getP1();
-                Point2D<double> res_p2 = res->getP2();
-
-                if (seg2_p1.y > std::min(res_p1.y, res_p2.y) && seg2_p1.y < std::max(res_p1.y, res_p2.y)) {
-                    Point2D<double> split_pt(res_p1.x, seg1_p1.y);
-                    std::string new_id = _splitResistorAtPt(res, split_pt);
-                    double escape_jct_x = seg2_p1.x > res_p1.x ? seg1_rect.ur.x : seg1_rect.ll.x;
-                    std::string escape_jct_id = generateNodeID(seg1->getNetName());
-
-                    std::unique_ptr<Resistor> seg1_r_escape(new Resistor(new_id,
-                        escape_jct_id,
-                        seg1->getLayerName(),
-                        abs(split_pt.x - escape_jct_x),
-                        seg2_rect.ur.y - seg2_rect.ll.y,
-                        -1,
-                        split_pt,
-                        Point2D<double>(escape_jct_x, split_pt.y),
-                        seg1
-                    ));
-                    _resistor_network.emplace_back(std::move(seg1_r_escape));
-
-                    double min_dst = -1;
-                    std::string  min_dst_id = "";
-                    Point2D<double> min_dst_pt;
-                    for (Resistor *seg2_r : seg2->getResistors()) {
-                        if (min_dst < 0 || abs(seg2_r->getP1().x - escape_jct_x) < min_dst) {
-                            min_dst = abs(seg2_r->getP1().x - escape_jct_x);
-                            min_dst_id = seg2_r->getNodeId1();
-                            min_dst_pt = seg2_r->getP1();
-                        }
-
-                        if (min_dst < 0 || abs(seg2_r->getP2().x - escape_jct_x) < min_dst) {
-                            min_dst = abs(seg2_r->getP2().x - escape_jct_x);
-                            min_dst_id = seg2_r->getNodeId1();
-                            min_dst_pt = seg2_r->getP2();
-                        }
-                    }
-                    if (min_dst < 0) return;
-
-                    std::unique_ptr<Resistor> seg2_r_escape(new Resistor(escape_jct_id,
-                        min_dst_id,
-                        seg2->getLayerName(),
-                        min_dst,
-                        seg2_rect.ur.y - seg2_rect.ll.y,
-                        -1,
-                        Point2D<double>(escape_jct_x, split_pt.y),
-                        min_dst_pt,
-                        seg2
-                    ));
-                    _resistor_network.emplace_back(std::move(seg2_r_escape));
-                    return;
-                }
-            }
+            return true;
         }
-
+        return false;
     }
 
-    void Geometry::_handleContains(WireSegment *super_seg, WireSegment *sub_seg) {
-        if (sub_seg->getResistors().size() == 0) return; // if sub segment has no resistors then no work to be done!
+    bool _connectOverlappingViaRects(bool connect_to_top1, Resistor *seg1_res, Resistor *seg2_res) {
+        Point2D<double> seg1_pt = seg1_res->getP1();
+        Point2D<double> seg2_pt = seg2_res->getP1();
 
-        Rect2D<double> super_seg_rect = super_seg->getRect();
-
-        bool sub_seg_has_vertical_pred = sub_seg->getVerticalConnections().size() > 0;
-        Point2D<double> sub_seg_pt = sub_seg_has_vertical_pred ? sub_seg->getP2() : sub_seg->getP1(); // just in case they're different be aware of existing resistance structure
-
-        if (super_seg->getResistors().size() == 0) {
-            // no resistor for seg, need to generate one
-
-            Point2D<double> center((super_seg_rect.ll.x + super_seg_rect.ur.x) / 2, (super_seg_rect.ll.y + super_seg_rect.ur.y) / 2);
-            double area = (super_seg_rect.ur.x - super_seg_rect.ll.x) * (super_seg_rect.ur.y - super_seg_rect.ll.y);
-
-            if (sub_seg_has_vertical_pred) { // has a vertical pred ==> has resistor below it so connect to its top
-                Resistor *sub_seg_resistor = sub_seg->getResistors()[0];
-
-                std::unique_ptr<Resistor> resistor(new Resistor(sub_seg_resistor->getNodeId2(),
-                    generateNodeID(super_seg->getNetName()),
-                    super_seg->getLayerName(),
-                    -1,
-                    -1,
-                    area,
-                    sub_seg_pt,
-                    center,
-                    super_seg
-                ));
-                _resistor_network.emplace_back(std::move(resistor));
-            } else { // has resistor above it, connect to its bottom
-                Resistor *sub_seg_resistor = sub_seg->getResistors()[0];
-
-                std::unique_ptr<Resistor> resistor(new Resistor(generateNodeID(super_seg->getNetName()),
-                    sub_seg_resistor->getNodeId1(),
-                    super_seg->getLayerName(),
-                    -1,
-                    -1,
-                    area,
-                    center,
-                    sub_seg_pt,
-                    super_seg
-                ));
-                _resistor_network.emplace_back(std::move(resistor));
+        // assumption: each via will have at least one "hanging" node adjacent to other's hanging node
+        if (seg1_pt.x == seg2_pt.x && seg1_pt.y == seg2_pt.y) {
+            if (connect_to_top1) {
+                seg1_res->setNodeId2(seg2_res->getNodeId1());
+            } else {
+                seg1_res->setNodeId1(seg2_res->getNodeId2());
             }
-        } else {
-            for (Resistor *r : super_seg->getResistors()) {
-                Point2D<double> res_p1 = r->getP1();
-                Point2D<double> res_p2 = r->getP2();
-                if (res_p1.x == sub_seg_pt.x && res_p1.y == sub_seg_pt.y) { // length wise resistor shares point with sub segment
-                    if (sub_seg_has_vertical_pred) {
-                        sub_seg->getResistors()[0]->setNodeId2(r->getNodeId1());
-                    } else {
-                        if ((r->getArea() == -1 ? r->getNodeId1() : r->getNodeId2()) == sub_seg->getResistors()[0]->getNodeId2()) {
-                            std::cout << "START BAD BLAH BLAH" << std::endl;
-                            r->print(std::cout);
-                            sub_seg->getResistors()[0]->print(std::cout);
-                            std::cout << "END BAD BLAH BLAH" << std::endl;
-                        }
-                        sub_seg->getResistors()[0]->setNodeId1(r->getArea() == -1 ? r->getNodeId1() : r->getNodeId2());
-                    }
-                    return;
-                } else if (res_p2.x == sub_seg_pt.x && res_p2.y == sub_seg_pt.y) {
-                    if (sub_seg_has_vertical_pred) {
-                        sub_seg->getResistors()[0]->setNodeId2(r->getArea() == -1 ? r->getNodeId2() : r->getNodeId1());
-                    } else {
-                        sub_seg->getResistors()[0]->setNodeId1(r->getNodeId2());
-                    }
-                    return;
-                } else if (r->getArea() == -1 && res_p2.x == res_p1.x && res_p2.x == sub_seg_pt.x && sub_seg_pt.y > std::min(res_p1.y, res_p2.y) && sub_seg_pt.y < std::max(res_p1.y, res_p2.y)) { // other_seg falls in middle of res
-                    std::string new_node_id = _splitResistorAtPt(r, sub_seg_pt);
-                    if (sub_seg_has_vertical_pred) {
-                        sub_seg->getResistors()[0]->setNodeId2(new_node_id);
-                    } else {
-                        sub_seg->getResistors()[0]->setNodeId1(new_node_id);
-                    }
-                    return;
-                } else if (r->getArea() == -1 && res_p2.y == res_p1.y && res_p2.y == sub_seg_pt.y && sub_seg_pt.x > std::min(res_p1.x, res_p2.x) && sub_seg_pt.x < std::max(res_p1.x, res_p2.x)) { // other_seg falls in middle of res
-                    std::string new_node_id = _splitResistorAtPt(r, sub_seg_pt);
-                    if (sub_seg_has_vertical_pred) {
-                        sub_seg->getResistors()[0]->setNodeId2(new_node_id);
-                    } else {
-                        sub_seg->getResistors()[0]->setNodeId1(new_node_id);
-                    }
-                    return;
+            return true;
+        }
+        return false;
+    }
+
+    void Geometry::_connectOverlappingPlanarSegs(WireSegment *seg1, WireSegment *seg2) {
+        for (Resistor * seg1_res: seg1->getResistors()) {
+            for (Resistor *seg2_res: seg2->getResistors()) {
+                if (seg1_res->isVertical() || seg2_res->isVertical()) continue;
+
+                bool swp = false;
+
+                if (seg2_res->getLength() > seg1_res->getLength()) {
+                    Resistor *tmp = seg1_res;
+                    seg1_res = seg2_res;
+                    seg2_res = tmp;
+
+                    WireSegment *tmp_seg = seg1;
+                    seg1 = seg2;
+                    seg2 = tmp_seg;
+
+                    swp = true;
                 }
+                
+                Point2D<double> seg1_res_p1 = seg1_res->getP1();
+                Point2D<double> seg1_res_p2 = seg1_res->getP2();
+                Point2D<double> seg2_res_p1 = seg2_res->getP1();
+                Point2D<double> seg2_res_p2 = seg2_res->getP2();
+
+                Rect2D<double> seg2_rect = seg2->getRect();
+
+                Point2D<double> split_pt;
+                bool move_ur = true; // track which corner of seg1 is getting moved
+                bool move_horiz = true;
+                Point2D<double> endpt = seg1_res_p1;
+
+                if ((seg1_res_p1.x == seg2_res_p1.x && seg1_res_p1.y == seg2_res_p1.y) || (seg1_res_p1.x == seg2_res_p2.x && seg1_res_p1.y == seg2_res_p2.y)) {
+                    split_pt.x = seg1_res_p1.x;
+                    split_pt.y = seg1_res_p1.y;
+
+                    if (seg1_res_p2.x < seg1_res_p1.x) {
+                        split_pt.x = seg2_rect.ll.x;
+                    } else if (seg1_res_p2.x > seg1_res_p1.x) {
+                        split_pt.x = seg2_rect.ur.x;
+                        move_ur = false;
+                    } else if (seg1_res_p2.y < seg1_res_p1.y) {
+                        split_pt.y = seg2_rect.ll.y;
+                        move_horiz = false;
+                    } else if (seg1_res_p2.y > seg1_res_p1.y) {
+                        split_pt.y = seg2_rect.ur.y;
+                        move_ur = false;
+                        move_horiz = false;
+                    } else {
+                        std::cout << "should never happen..." << "seg1_res_p1: (" << seg1_res_p1.x << ", " << seg1_res_p1.y << ") | seg1_res_p2: (" << seg1_res_p2.x << ", " << seg1_res_p2.y << ")" << std::endl;
+                        seg1_res->print(std::cout);
+                        std::cout << "split_pt (" << split_pt.x << ", " << split_pt.y << ")" << std::endl;
+                    }
+                } else if ((seg1_res_p2.x == seg2_res_p1.x && seg1_res_p2.y == seg2_res_p1.y) || (seg1_res_p2.x == seg2_res_p2.x && seg1_res_p2.y == seg2_res_p2.y)) {
+                    endpt = seg1_res_p2;
+                    split_pt.x = seg1_res_p2.x;
+                    split_pt.y = seg1_res_p2.y;
+
+                    if (seg1_res_p2.x < seg1_res_p1.x) {
+                        split_pt.x = seg2_rect.ur.x;
+                        move_ur = false;
+                    } else if (seg1_res_p2.x > seg1_res_p1.x) {
+                        split_pt.x = seg2_rect.ll.x;
+                    } else if (seg1_res_p2.y < seg1_res_p1.y) {
+                        split_pt.y = seg2_rect.ur.y;
+                        move_ur = false;
+                        move_horiz = false;
+                    } else if (seg1_res_p2.y > seg1_res_p1.y) {
+                        split_pt.y = seg2_rect.ll.y;
+                        move_horiz = false;
+                    } else {
+                        std::cout << "should never happen..." << std::endl;
+                    }
+                } else {
+                    if (swp) {
+                        Resistor *tmp = seg1_res;
+                        seg1_res = seg2_res;
+                        seg2_res = tmp;
+
+                        WireSegment *tmp_seg = seg1;
+                        seg1 = seg2;
+                        seg2 = tmp_seg;
+                    }
+                    continue;
+                }
+
+                std::string new_id = _splitResistorAtPt(seg1_res, split_pt);
+                Resistor *escape_res = seg1->getResistorByPoints(endpt, split_pt);
+
+                if (!escape_res) {
+                    std::cout << "something wrong..." << std::endl;
+                }
+                escape_res->setOwnerSegment(seg2);
+
+                Rect2D<double> seg1_rect = seg1->getRect();
+                seg1->setP1(split_pt);
+                if (endpt.x == seg1_res_p1.x && endpt.y == seg1_res_p1.y) {
+                    seg1->setP2(seg1_res_p2);
+                } else {
+                    seg1_res->setP1(split_pt);
+                    seg1_res->setP2(seg1_res_p1);
+                    seg1->setP2(seg1_res_p1);
+                }
+
+                if (move_ur && move_horiz) {
+                    seg1->setRectUR(Point2D<double>(split_pt.x, seg1_rect.ur.y));
+                } else if (move_ur) {
+                    seg1->setRectUR(Point2D<double>(seg1_rect.ur.x, split_pt.y));
+                } else if (move_horiz) {
+                    seg1->setRectLL(Point2D<double>(split_pt.x, seg1_rect.ll.y));
+                } else {
+                    seg1->setRectLL(Point2D<double>(seg1_rect.ll.x, split_pt.x));
+                }
+                return;
             }
         }
     }
+
+    void Geometry::_connectOverlappingSegments(WireSegment *seg1, WireSegment *seg2) {
+        for (Resistor *seg1_res : seg1->getResistors()) {
+            for (Resistor *seg2_res : seg2->getResistors()) {
+                Resistor *vert_r = seg2_res;
+                Resistor *horiz_r = seg1_res;
+                WireSegment *vert_seg = seg2;
+
+                if (seg1_res->isVertical() && seg2_res->isVertical()) {
+                    bool connect_to_top1 = seg1->hasVerticalConnections(); 
+                    if (_connectOverlappingViaRects(connect_to_top1, seg1_res, seg2_res)) return;
+                } else if (seg1_res->isVertical()) {
+                    vert_r = seg1_res;
+                    horiz_r = seg2_res;
+                    vert_seg = seg1;
+                } else if (!seg2_res->isVertical()) {
+                    // 
+                    continue;
+                }
+                // if true then there is another vertical resistor connected to the bottom so connect horiz_r to top
+                bool connect_to_top = vert_seg->hasVerticalConnections(); 
+                if (_connectViaToLayer(connect_to_top, vert_r, horiz_r)) return;
+            }
+        }
+    }
+
+    // void Geometry::_handleOverlap(WireSegment *seg1, WireSegment *seg2) {
+    //     if (seg1->getResistors().size() == 0 || seg2->getResistors().size() == 0) return;
+
+    //     Point2D<double> seg1_p1 = seg1->getP1();
+    //     Point2D<double> seg1_p2 = seg1->getP2();
+
+    //     Point2D<double> seg2_p1 = seg2->getP1();
+    //     Point2D<double> seg2_p2 = seg2->getP2();
+
+    //     Rect2D<double> seg1_rect = seg1->getRect();
+    //     Rect2D<double> seg2_rect = seg2->getRect();
+
+    //     if (seg1_p1.x == seg1_p2.x && seg1_p1.x > std::min(seg2_p1.x, seg2_p2.x) && seg1_p1.x < std::max(seg2_p1.x, seg2_p2.x)) { // seg 1 vertical, cuts seg 2
+    //         for (Resistor *res : seg2->getResistors()) {
+    //             Point2D<double> res_p1 = res->getP1();
+    //             Point2D<double> res_p2 = res->getP2();
+
+    //             if (seg1_p1.x > std::min(res_p1.x, res_p2.x) && seg1_p1.x < std::max(res_p1.x, res_p2.x)) {
+    //                 Point2D<double> split_pt(seg1_p1.x, res_p1.y);
+    //                 std::string new_id = _splitResistorAtPt(res, split_pt);
+    //                 double escape_jct_y = seg1_p1.y > res_p1.y ? seg2_rect.ur.y : seg2_rect.ll.y;
+    //                 std::string escape_jct_id = generateNodeID(seg2->getNetName());
+
+    //                 std::unique_ptr<Resistor> seg2_r_escape(new Resistor(new_id,
+    //                     escape_jct_id,
+    //                     seg2->getLayerName(),
+    //                     abs(split_pt.y - escape_jct_y),
+    //                     seg1_rect.ur.x - seg1_rect.ll.x,
+    //                     -1,
+    //                     split_pt,
+    //                     Point2D<double>(split_pt.x, escape_jct_y),
+    //                     seg2
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg2_r_escape));
+
+    //                 double min_dst = -1;
+    //                 std::string  min_dst_id = "";
+    //                 Point2D<double> min_dst_pt;
+    //                 for (Resistor *seg1_r : seg1->getResistors()) {
+    //                     if (min_dst < 0 || abs(seg1_r->getP1().y - escape_jct_y) < min_dst) {
+    //                         min_dst = abs(seg1_r->getP1().y - escape_jct_y);
+    //                         min_dst_id = seg1_r->getNodeId1();
+    //                         min_dst_pt = seg1_r->getP1();
+    //                     }
+
+    //                     if (min_dst < 0 || abs(seg1_r->getP2().y - escape_jct_y) < min_dst) {
+    //                         min_dst = abs(seg1_r->getP2().y - escape_jct_y);
+    //                         min_dst_id = seg1_r->getNodeId1();
+    //                         min_dst_pt = seg1_r->getP2();
+    //                     }
+    //                 }
+    //                 if (min_dst < 0) return;
+
+    //                 std::unique_ptr<Resistor> seg1_r_escape(new Resistor(escape_jct_id,
+    //                     min_dst_id,
+    //                     seg1->getLayerName(),
+    //                     min_dst,
+    //                     seg1_rect.ur.x - seg1_rect.ll.x,
+    //                     -1,
+    //                     Point2D<double>(split_pt.x, escape_jct_y),
+    //                     min_dst_pt,
+    //                     seg1
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg1_r_escape));
+    //                 return;
+    //             }
+    //         }
+
+    //     } else if (seg1_p1.y == seg1_p2.y && seg1_p1.y > std::min(seg2_p1.y, seg2_p2.y) && seg1_p1.y < std::max(seg2_p1.y, seg2_p2.y)) { // seg 1 horizontal, cuts seg 2
+    //         for (Resistor *res : seg2->getResistors()) {
+    //             Point2D<double> res_p1 = res->getP1();
+    //             Point2D<double> res_p2 = res->getP2();
+
+    //             if (seg1_p1.y > std::min(res_p1.y, res_p2.y) && seg1_p1.y < std::max(res_p1.y, res_p2.y)) {
+    //                 Point2D<double> split_pt(res_p1.x, seg1_p1.y);
+    //                 std::string new_id = _splitResistorAtPt(res, split_pt);
+    //                 double escape_jct_x = seg1_p1.x > res_p1.x ? seg2_rect.ur.x : seg2_rect.ll.x;
+    //                 std::string escape_jct_id = generateNodeID(seg2->getNetName());
+
+    //                 std::unique_ptr<Resistor> seg2_r_escape(new Resistor(new_id,
+    //                     escape_jct_id,
+    //                     seg2->getLayerName(),
+    //                     abs(split_pt.x - escape_jct_x),
+    //                     seg1_rect.ur.y - seg1_rect.ll.y,
+    //                     -1,
+    //                     split_pt,
+    //                     Point2D<double>(escape_jct_x, split_pt.y),
+    //                     seg2
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg2_r_escape));
+
+    //                 double min_dst = -1;
+    //                 std::string  min_dst_id = "";
+    //                 Point2D<double> min_dst_pt;
+    //                 for (Resistor *seg1_r : seg1->getResistors()) {
+    //                     if (min_dst < 0 || abs(seg1_r->getP1().x - escape_jct_x) < min_dst) {
+    //                         min_dst = abs(seg1_r->getP1().x - escape_jct_x);
+    //                         min_dst_id = seg1_r->getNodeId1();
+    //                         min_dst_pt = seg1_r->getP1();
+    //                     }
+
+    //                     if (min_dst < 0 || abs(seg1_r->getP2().x - escape_jct_x) < min_dst) {
+    //                         min_dst = abs(seg1_r->getP2().x - escape_jct_x);
+    //                         min_dst_id = seg1_r->getNodeId1();
+    //                         min_dst_pt = seg1_r->getP2();
+    //                     }
+    //                 }
+    //                 if (min_dst < 0) return;
+
+    //                 std::unique_ptr<Resistor> seg1_r_escape(new Resistor(escape_jct_id,
+    //                     min_dst_id,
+    //                     seg1->getLayerName(),
+    //                     min_dst,
+    //                     seg1_rect.ur.y - seg1_rect.ll.y,
+    //                     -1,
+    //                     Point2D<double>(escape_jct_x, split_pt.y),
+    //                     min_dst_pt,
+    //                     seg1
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg1_r_escape));
+    //                 return;
+    //             }
+    //         }
+
+    //     } else if (seg2_p1.x == seg2_p2.x && seg2_p1.x > std::min(seg1_p1.x, seg1_p2.x) && seg2_p1.x < std::max(seg1_p1.x, seg1_p2.x)) { // seg 2 vertical, cuts seg 1
+    //         for (Resistor *res : seg1->getResistors()) {
+    //             Point2D<double> res_p1 = res->getP1();
+    //             Point2D<double> res_p2 = res->getP2();
+
+    //             if (seg2_p1.x > std::min(res_p1.x, res_p2.x) && seg2_p1.x < std::max(res_p1.x, res_p2.x)) {
+    //                 Point2D<double> split_pt(seg2_p1.x, res_p1.y);
+    //                 std::string new_id = _splitResistorAtPt(res, split_pt);
+    //                 double escape_jct_y = seg2_p1.y > res_p1.y ? seg1_rect.ur.y : seg1_rect.ll.y;
+    //                 std::string escape_jct_id = generateNodeID(seg1->getNetName());
+
+    //                 std::unique_ptr<Resistor> seg1_r_escape(new Resistor(new_id,
+    //                     escape_jct_id,
+    //                     seg1->getLayerName(),
+    //                     abs(split_pt.y - escape_jct_y),
+    //                     seg2_rect.ur.x - seg2_rect.ll.x,
+    //                     -1,
+    //                     split_pt,
+    //                     Point2D<double>(split_pt.x, escape_jct_y),
+    //                     seg1
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg1_r_escape));
+
+    //                 double min_dst = -1;
+    //                 std::string  min_dst_id = "";
+    //                 Point2D<double> min_dst_pt;
+    //                 for (Resistor *seg2_r : seg2->getResistors()) {
+    //                     if (min_dst < 0 || abs(seg2_r->getP1().y - escape_jct_y) < min_dst) {
+    //                         min_dst = abs(seg2_r->getP1().y - escape_jct_y);
+    //                         min_dst_id = seg2_r->getNodeId1();
+    //                         min_dst_pt = seg2_r->getP1();
+    //                     }
+
+    //                     if (min_dst < 0 || abs(seg2_r->getP2().y - escape_jct_y) < min_dst) {
+    //                         min_dst = abs(seg2_r->getP2().y - escape_jct_y);
+    //                         min_dst_id = seg2_r->getNodeId1();
+    //                         min_dst_pt = seg2_r->getP2();
+    //                     }
+    //                 }
+    //                 if (min_dst < 0) return;
+
+    //                 std::unique_ptr<Resistor> seg2_r_escape(new Resistor(escape_jct_id,
+    //                     min_dst_id,
+    //                     seg2->getLayerName(),
+    //                     min_dst,
+    //                     seg2_rect.ur.x - seg1_rect.ll.x,
+    //                     -1,
+    //                     Point2D<double>(split_pt.x, escape_jct_y),
+    //                     min_dst_pt,
+    //                     seg2
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg2_r_escape));
+    //                 return;
+    //             }
+    //         }
+
+    //     } else if (seg2_p1.y == seg2_p2.y && seg2_p1.y > std::min(seg1_p1.y, seg1_p2.y) && seg2_p1.y < std::max(seg1_p1.y, seg1_p2.y)) { // seg 1 vertical, cuts seg 2
+    //         for (Resistor *res : seg1->getResistors()) {
+    //             Point2D<double> res_p1 = res->getP1();
+    //             Point2D<double> res_p2 = res->getP2();
+
+    //             if (seg2_p1.y > std::min(res_p1.y, res_p2.y) && seg2_p1.y < std::max(res_p1.y, res_p2.y)) {
+    //                 Point2D<double> split_pt(res_p1.x, seg1_p1.y);
+    //                 std::string new_id = _splitResistorAtPt(res, split_pt);
+    //                 double escape_jct_x = seg2_p1.x > res_p1.x ? seg1_rect.ur.x : seg1_rect.ll.x;
+    //                 std::string escape_jct_id = generateNodeID(seg1->getNetName());
+
+    //                 std::unique_ptr<Resistor> seg1_r_escape(new Resistor(new_id,
+    //                     escape_jct_id,
+    //                     seg1->getLayerName(),
+    //                     abs(split_pt.x - escape_jct_x),
+    //                     seg2_rect.ur.y - seg2_rect.ll.y,
+    //                     -1,
+    //                     split_pt,
+    //                     Point2D<double>(escape_jct_x, split_pt.y),
+    //                     seg1
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg1_r_escape));
+
+    //                 double min_dst = -1;
+    //                 std::string  min_dst_id = "";
+    //                 Point2D<double> min_dst_pt;
+    //                 for (Resistor *seg2_r : seg2->getResistors()) {
+    //                     if (min_dst < 0 || abs(seg2_r->getP1().x - escape_jct_x) < min_dst) {
+    //                         min_dst = abs(seg2_r->getP1().x - escape_jct_x);
+    //                         min_dst_id = seg2_r->getNodeId1();
+    //                         min_dst_pt = seg2_r->getP1();
+    //                     }
+
+    //                     if (min_dst < 0 || abs(seg2_r->getP2().x - escape_jct_x) < min_dst) {
+    //                         min_dst = abs(seg2_r->getP2().x - escape_jct_x);
+    //                         min_dst_id = seg2_r->getNodeId1();
+    //                         min_dst_pt = seg2_r->getP2();
+    //                     }
+    //                 }
+    //                 if (min_dst < 0) return;
+
+    //                 std::unique_ptr<Resistor> seg2_r_escape(new Resistor(escape_jct_id,
+    //                     min_dst_id,
+    //                     seg2->getLayerName(),
+    //                     min_dst,
+    //                     seg2_rect.ur.y - seg2_rect.ll.y,
+    //                     -1,
+    //                     Point2D<double>(escape_jct_x, split_pt.y),
+    //                     min_dst_pt,
+    //                     seg2
+    //                 ));
+    //                 _resistor_network.emplace_back(std::move(seg2_r_escape));
+    //                 return;
+    //             }
+    //         }
+    //     }
+
+    // }
+
+    // void Geometry::_handleContains(WireSegment *super_seg, WireSegment *sub_seg) {
+    //     if (sub_seg->getResistors().size() == 0) return; // if sub segment has no resistors then no work to be done!
+
+    //     Rect2D<double> super_seg_rect = super_seg->getRect();
+
+    //     bool sub_seg_has_vertical_pred = sub_seg->getVerticalConnections().size() > 0;
+    //     Point2D<double> sub_seg_pt = sub_seg_has_vertical_pred ? sub_seg->getP2() : sub_seg->getP1(); // just in case they're different be aware of existing resistance structure
+
+    //     if (super_seg->getResistors().size() == 0) {
+    //         // no resistor for seg, need to generate one
+
+    //         Point2D<double> center((super_seg_rect.ll.x + super_seg_rect.ur.x) / 2, (super_seg_rect.ll.y + super_seg_rect.ur.y) / 2);
+    //         double area = (super_seg_rect.ur.x - super_seg_rect.ll.x) * (super_seg_rect.ur.y - super_seg_rect.ll.y);
+
+    //         if (sub_seg_has_vertical_pred) { // has a vertical pred ==> has resistor below it so connect to its top
+    //             Resistor *sub_seg_resistor = sub_seg->getResistors()[0];
+
+    //             std::unique_ptr<Resistor> resistor(new Resistor(sub_seg_resistor->getNodeId2(),
+    //                 generateNodeID(super_seg->getNetName()),
+    //                 super_seg->getLayerName(),
+    //                 -1,
+    //                 -1,
+    //                 area,
+    //                 sub_seg_pt,
+    //                 center,
+    //                 super_seg
+    //             ));
+    //             _resistor_network.emplace_back(std::move(resistor));
+    //         } else { // has resistor above it, connect to its bottom
+    //             Resistor *sub_seg_resistor = sub_seg->getResistors()[0];
+
+    //             std::unique_ptr<Resistor> resistor(new Resistor(generateNodeID(super_seg->getNetName()),
+    //                 sub_seg_resistor->getNodeId1(),
+    //                 super_seg->getLayerName(),
+    //                 -1,
+    //                 -1,
+    //                 area,
+    //                 center,
+    //                 sub_seg_pt,
+    //                 super_seg
+    //             ));
+    //             _resistor_network.emplace_back(std::move(resistor));
+    //         }
+    //     } else {
+    //         for (Resistor *r : super_seg->getResistors()) {
+    //             Point2D<double> res_p1 = r->getP1();
+    //             Point2D<double> res_p2 = r->getP2();
+    //             if (res_p1.x == sub_seg_pt.x && res_p1.y == sub_seg_pt.y) { // length wise resistor shares point with sub segment
+    //                 if (sub_seg_has_vertical_pred) {
+    //                     sub_seg->getResistors()[0]->setNodeId2(r->getNodeId1());
+    //                 } else {
+    //                     sub_seg->getResistors()[0]->setNodeId1(r->getArea() == -1 ? r->getNodeId1() : r->getNodeId2());
+    //                 }
+    //                 return;
+    //             } else if (res_p2.x == sub_seg_pt.x && res_p2.y == sub_seg_pt.y) {
+    //                 if (sub_seg_has_vertical_pred) {
+    //                     sub_seg->getResistors()[0]->setNodeId2(r->getArea() == -1 ? r->getNodeId2() : r->getNodeId1());
+    //                 } else {
+    //                     sub_seg->getResistors()[0]->setNodeId1(r->getNodeId2());
+    //                 }
+    //                 return;
+    //             } else if (r->getArea() == -1 && res_p2.x == res_p1.x && res_p2.x == sub_seg_pt.x && sub_seg_pt.y > std::min(res_p1.y, res_p2.y) && sub_seg_pt.y < std::max(res_p1.y, res_p2.y)) { // other_seg falls in middle of res
+    //                 std::string new_node_id = _splitResistorAtPt(r, sub_seg_pt);
+    //                 if (sub_seg_has_vertical_pred) {
+    //                     sub_seg->getResistors()[0]->setNodeId2(new_node_id);
+    //                 } else {
+    //                     sub_seg->getResistors()[0]->setNodeId1(new_node_id);
+    //                 }
+    //                 return;
+    //             } else if (r->getArea() == -1 && res_p2.y == res_p1.y && res_p2.y == sub_seg_pt.y && sub_seg_pt.x > std::min(res_p1.x, res_p2.x) && sub_seg_pt.x < std::max(res_p1.x, res_p2.x)) { // other_seg falls in middle of res
+    //                 std::string new_node_id = _splitResistorAtPt(r, sub_seg_pt);
+    //                 if (sub_seg_has_vertical_pred) {
+    //                     sub_seg->getResistors()[0]->setNodeId2(new_node_id);
+    //                 } else {
+    //                     sub_seg->getResistors()[0]->setNodeId1(new_node_id);
+    //                 }
+    //                 return;
+    //             }
+    //         }
+    //     }
+    // }
     
 
      std::vector<std::unique_ptr<WireSegment>> &Geometry::getSegmentsOfNet(std::string net) {

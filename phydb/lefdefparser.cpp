@@ -831,7 +831,7 @@ int getDefIOPins(defrCallbackType_e type, defiPin *pin, defiUserData data) {
 }
 
 void addNetGeometry(defiNet *net, PhyDB *phy_db_ptr, bool specialnet) {
-  // #define BEN_DEBUG
+  #define BEN_DEBUG
 
   double ext_length = specialnet ? 0 : -1;
 
