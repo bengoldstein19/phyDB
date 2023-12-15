@@ -4,7 +4,7 @@
 - Small example that uses pretty much all of functionality: net delayblk3.d[6].ix1.Y.
     - Example LEF, DEF, and test run files are included in test/
     - txt file shown for example input/output for the above net
-- Usage: read in lef/def, call "GenerateRCNetwork" on phydb object to store the resistors/capacitors, call "PrintRCNetworK" to dump
+- Usage: read in lef/def, call "GenerateRCNetwork" on phydb object to store the resistors/capacitors, call "PrintRCNetworK" to dump to output
 
 
 # PhyDB
