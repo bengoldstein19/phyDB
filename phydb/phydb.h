@@ -211,6 +211,9 @@ class PhyDB {
 
   void AddRectGeometry(std::string layer_name, int &net_segment_id, std::string net_name, Rect2D<double> rect);
 
+  void GenerateRCNetwork() { geometry_.generateRCNetwork(); }
+  void PrintRCNetwork(std::ostream &s) { geometry_.printRCNetwork(s); }
+
   /************************************************
   * The following APIs are for setting up callback functions for timing-driven flow
   * and pointers of parasitic manager, cell libs, adaptor

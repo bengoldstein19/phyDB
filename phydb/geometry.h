@@ -221,7 +221,7 @@ namespace phydb {
             void _populateResistorNetwork();
             void _populateCapacitanceNetwork();
             // void _handleContains(WireSegment *super_seg, WireSegment *sub_seg); // helper function to handle total segment containment
-            void _connectOverlappingSegments(WireSegment *seg1, WireSegment *seg2); // helper function to handle via segment overlap with planar segment
+            void _connectOverlappingViaSegments(WireSegment *seg1, WireSegment *seg2); // helper function to handle via segment overlap with planar segment
             void _connectOverlappingPlanarSegs(WireSegment *seg1, WireSegment *seg2);
 
             std::string _splitResistorAtPt(Resistor *res, Point2D<double> sub_seg_pt); // handles splitting resistor, returns new node id

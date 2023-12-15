@@ -62,7 +62,15 @@ namespace phydb {
               << _owner_segment->getNetName()
               << ":"
               << _owner_segment->getSegmentNumber()
-              << "'>"
+              << "' point1=("
+              << _p1.x
+              << ", "
+              << _p1.y
+              << "), point2=("
+              << _p2.x
+              << ", "
+              << _p2.y
+              << ")>"
               << std::endl;
         } else {
             s << "VerticalResistor<lower-node='"
@@ -77,7 +85,11 @@ namespace phydb {
               << _owner_segment->getNetName()
               << ":"
               << _owner_segment->getSegmentNumber()
-              << "'>"
+              << "' point=("
+              << _p1.x
+              << ", "
+              << _p1.y
+              << ")>"
               << std::endl;
         }
     }
@@ -212,8 +224,11 @@ namespace phydb {
                     Rect2D<double> seg_rect = seg->getRect();
                     Rect2D<double> other_seg_rect = other_seg->getRect();
 
+                    // consider each pair only once
+                    if (seg->getNetName() + std::to_string(seg->getSegmentNumber()) < other_seg->getNetName() + std::to_string(seg->getSegmentNumber())) continue;
+
                     // for overlapping rectangles find the closest resistor point pair and coalesce/combine with escape resistors
-                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll)) {
+                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll) || rectContains(other_seg_rect, seg_rect.ur)) {
                         _connectOverlappingPlanarSegs(seg, other_seg);
                     }
                 }
@@ -233,9 +248,12 @@ namespace phydb {
                     Rect2D<double> seg_rect = seg->getRect();
                     Rect2D<double> other_seg_rect = other_seg->getRect();
 
+                    if (seg->getNetName() + std::to_string(seg->getSegmentNumber()) < other_seg->getNetName() + std::to_string(seg->getSegmentNumber())) continue;
+
+
                     // for overlapping rectangles find the closest resistor point pair and coalesce/combine with escape resistors
-                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll)) {
-                        _connectOverlappingSegments(seg, other_seg);
+                    if (rectContains(seg_rect, other_seg_rect.ll) || rectContains(seg_rect, other_seg_rect.ur) || rectContains(other_seg_rect, seg_rect.ll) || rectContains(other_seg_rect, seg_rect.ur)) {
+                        _connectOverlappingViaSegments(seg, other_seg);
                     }
                 }
             }
@@ -351,10 +369,13 @@ namespace phydb {
                 bool move_ur = true; // track which corner of seg1 is getting moved
                 bool move_horiz = true;
                 Point2D<double> endpt = seg1_res_p1;
+                std::string new_endpt_id;
 
                 if ((seg1_res_p1.x == seg2_res_p1.x && seg1_res_p1.y == seg2_res_p1.y) || (seg1_res_p1.x == seg2_res_p2.x && seg1_res_p1.y == seg2_res_p2.y)) {
                     split_pt.x = seg1_res_p1.x;
                     split_pt.y = seg1_res_p1.y;
+                    if (seg1_res_p1.x == seg2_res_p1.x && seg1_res_p1.y == seg2_res_p1.y) new_endpt_id = seg2_res->getNodeId1();
+                    else new_endpt_id = seg2_res->getNodeId2();
 
                     if (seg1_res_p2.x < seg1_res_p1.x) {
                         split_pt.x = seg2_rect.ll.x;
@@ -374,6 +395,8 @@ namespace phydb {
                         std::cout << "split_pt (" << split_pt.x << ", " << split_pt.y << ")" << std::endl;
                     }
                 } else if ((seg1_res_p2.x == seg2_res_p1.x && seg1_res_p2.y == seg2_res_p1.y) || (seg1_res_p2.x == seg2_res_p2.x && seg1_res_p2.y == seg2_res_p2.y)) {
+                    if (seg1_res_p2.x == seg2_res_p1.x && seg1_res_p2.y == seg2_res_p1.y) new_endpt_id = seg2_res->getNodeId1();
+                    else new_endpt_id = seg2_res->getNodeId2();
                     endpt = seg1_res_p2;
                     split_pt.x = seg1_res_p2.x;
                     split_pt.y = seg1_res_p2.y;
@@ -414,13 +437,17 @@ namespace phydb {
                 }
                 escape_res->setOwnerSegment(seg2);
 
+                // actually connect escape resistor to seg2_res
+                Point2D<double> escape_res_p1 = escape_res->getP1();
+                if (endpt.x == escape_res_p1.x && endpt.y == escape_res_p1.y) escape_res->setNodeId1(new_endpt_id);
+                else escape_res->setNodeId2(new_endpt_id);
+                
+
                 Rect2D<double> seg1_rect = seg1->getRect();
                 seg1->setP1(split_pt);
                 if (endpt.x == seg1_res_p1.x && endpt.y == seg1_res_p1.y) {
                     seg1->setP2(seg1_res_p2);
                 } else {
-                    seg1_res->setP1(split_pt);
-                    seg1_res->setP2(seg1_res_p1);
                     seg1->setP2(seg1_res_p1);
                 }
 
@@ -438,7 +465,7 @@ namespace phydb {
         }
     }
 
-    void Geometry::_connectOverlappingSegments(WireSegment *seg1, WireSegment *seg2) {
+    void Geometry::_connectOverlappingViaSegments(WireSegment *seg1, WireSegment *seg2) {
         for (Resistor *seg1_res : seg1->getResistors()) {
             for (Resistor *seg2_res : seg2->getResistors()) {
                 Resistor *vert_r = seg2_res;
@@ -823,10 +850,12 @@ namespace phydb {
                 if (seg->getResistors().size() == 0) continue;
                 std::vector<WireSegment *> nbr_ptrs = getOtherNetsNearbySegments(seg.get());
                 for (WireSegment *nbr_ptr : nbr_ptrs) {
-                    if (nbr_ptr->getResistors().size() == 0) continue;
+                    if (nbr_ptr->getResistors().size() == 0) continue; // disregard pairs that share a net or have no resistors to even connect to
+
                     Rect2D<double> seg_rect = seg->getRect();
                     Rect2D<double> nbr_rect = nbr_ptr->getRect();
-                    if (seg_rect.ll.y < nbr_rect.ll.y) { // double counting problem
+
+                    if (seg->getNetName() + std::to_string(nbr_ptr->getSegmentNumber()) < nbr_ptr->getNetName() + std::to_string(nbr_ptr->getSegmentNumber())) { // double counting problem
                         continue;
                     }
                     
@@ -840,18 +869,21 @@ namespace phydb {
 
                         overlap_center = (std::min(seg_rect.ur.x, nbr_rect.ur.x) + std::max(seg_rect.ll.x, nbr_rect.ll.x)) / 2;
 
-                        std::string seg_split_id;
+                        Resistor *seg_split_res = nullptr, *nbr_split_res = nullptr;
+                        Point2D<double> seg_split_pt, nbr_split_pt;
+
                         for (Resistor *seg_res : seg->getResistors()) {
                             Point2D<double> seg_res_p1 = seg_res->getP1();
                             Point2D<double> seg_res_p2 = seg_res->getP2();
 
                             if (seg_res_p1.y == seg_res_p2.y && overlap_center > std::min(seg_res_p1.x, seg_res_p2.x) && overlap_center < std::max(seg_res_p1.x, seg_res_p2.x)) {
-                                seg_split_id = _splitResistorAtPt(seg_res, Point2D<double>(overlap_center, seg_res_p1.y));
+                                seg_split_res = seg_res;
+                                seg_split_pt = Point2D<double>(overlap_center, seg_res_p1.y);
                                 break;
                             }
                         }
 
-                        if (seg_split_id.length() == 0) {
+                        if (!seg_split_res) {
                             double overlap_left = std::max(seg_rect.ll.x, nbr_rect.ll.x);
                             double overlap_right = std::min(seg_rect.ur.x, nbr_rect.ur.x);
                             for (Resistor *seg_res : seg->getResistors()) {
@@ -864,24 +896,25 @@ namespace phydb {
                                     
                                     double sub_overlap_center = (std::max(overlap_left, std::min(seg_res_p1.x, seg_res_p2.x)) + std::min(overlap_right, std::max(seg_res_p1.x, seg_res_p2.x))) /2;
 
-                                    seg_split_id = _splitResistorAtPt(seg_res, Point2D<double>(sub_overlap_center, seg_res_p1.y));
+                                    seg_split_res = seg_res;
+                                    seg_split_pt = Point2D<double>(sub_overlap_center, seg_res_p1.y);
                                     break;
                                 }
                             }
                         }
 
-                        std::string nbr_split_id;
-                        for (Resistor *nbr_res : seg->getResistors()) {
+                        for (Resistor *nbr_res : nbr_ptr->getResistors()) {
                             Point2D<double> nbr_res_p1 = nbr_res->getP1();
                             Point2D<double> nbr_res_p2 = nbr_res->getP2();
 
                             if (nbr_res_p1.y == nbr_res_p2.y && overlap_center > std::min(nbr_res_p1.x, nbr_res_p2.x) && overlap_center < std::max(nbr_res_p1.x, nbr_res_p2.x)) {
-                                nbr_split_id = _splitResistorAtPt(nbr_res, Point2D<double>(overlap_center, nbr_res_p1.y));
+                                nbr_split_res = nbr_res;
+                                nbr_split_pt = Point2D<double>(overlap_center, nbr_res_p1.y);
                                 break;
                             }
                         }
 
-                        if (nbr_split_id.length() == 0) {
+                        if (!nbr_split_res) {
                             double overlap_left = std::max(nbr_rect.ll.x, seg_rect.ll.x);
                             double overlap_right = std::min(nbr_rect.ur.x, seg_rect.ur.x);
                             for (Resistor *nbr_res : nbr_ptr->getResistors()) {
@@ -894,13 +927,16 @@ namespace phydb {
                                     
                                     double sub_overlap_center = (std::max(overlap_left, std::min(nbr_res_p1.x, nbr_res_p2.x)) + std::min(overlap_right, std::max(nbr_res_p1.x, nbr_res_p2.x))) /2;
 
-                                    nbr_split_id = _splitResistorAtPt(nbr_res, Point2D<double>(sub_overlap_center, nbr_res_p1.y));
+                                    nbr_split_res = nbr_res;
+                                    nbr_split_pt = Point2D<double>(sub_overlap_center, nbr_res_p1.y);
                                     break;
                                 }
                             }
                         }
 
-                        if (!seg_split_id.empty() && !nbr_split_id.empty()) {
+                        if (nbr_split_res && seg_split_res) {
+                            std::string seg_split_id = _splitResistorAtPt(seg_split_res, seg_split_pt);
+                            std::string nbr_split_id = _splitResistorAtPt(nbr_split_res, nbr_split_pt);
                             std::unique_ptr<Capacitor> capacitor(new Capacitor(
                                 seg_split_id,
                                 nbr_split_id,
@@ -918,18 +954,21 @@ namespace phydb {
 
                         overlap_center = (std::min(seg_rect.ur.y, nbr_rect.ur.y) + std::max(seg_rect.ll.y, nbr_rect.ll.y)) / 2;
 
-                        std::string seg_split_id;
+                        Resistor *seg_split_res = nullptr, *nbr_split_res = nullptr;
+                        Point2D<double> seg_split_pt, nbr_split_pt;
+
                         for (Resistor *seg_res : seg->getResistors()) {
                             Point2D<double> seg_res_p1 = seg_res->getP1();
                             Point2D<double> seg_res_p2 = seg_res->getP2();
 
                             if (seg_res_p1.x == seg_res_p2.x && overlap_center > std::min(seg_res_p1.y, seg_res_p2.y) && overlap_center < std::max(seg_res_p1.y, seg_res_p2.y)) {
-                                seg_split_id = _splitResistorAtPt(seg_res, Point2D<double>(seg_res_p1.x, overlap_center));
+                                seg_split_res = seg_res;
+                                seg_split_pt = Point2D<double>(seg_res_p1.x, overlap_center);
                                 break;
                             }
                         }
 
-                        if (seg_split_id.length() == 0) {
+                        if (!seg_split_res) {
                             double overlap_left = std::max(seg_rect.ll.y, nbr_rect.ll.y);
                             double overlap_right = std::min(seg_rect.ur.y, nbr_rect.ur.y);
                             for (Resistor *seg_res : seg->getResistors()) {
@@ -942,24 +981,25 @@ namespace phydb {
                                     
                                     double sub_overlap_center = (std::max(overlap_left, std::min(seg_res_p1.y, seg_res_p2.y)) + std::min(overlap_right, std::max(seg_res_p1.y, seg_res_p2.y))) /2;
 
-                                    seg_split_id = _splitResistorAtPt(seg_res, Point2D<double>(seg_res_p1.x, sub_overlap_center));
+                                    seg_split_res = seg_res;
+                                    seg_split_pt = Point2D<double>(seg_res_p1.x, sub_overlap_center);
                                     break;
                                 }
                             }
                         }
 
-                        std::string nbr_split_id;
-                        for (Resistor *nbr_res : seg->getResistors()) {
+                        for (Resistor *nbr_res : nbr_ptr->getResistors()) {
                             Point2D<double> nbr_res_p1 = nbr_res->getP1();
                             Point2D<double> nbr_res_p2 = nbr_res->getP2();
 
                             if (nbr_res_p1.x == nbr_res_p2.x && overlap_center > std::min(nbr_res_p1.y, nbr_res_p2.y) && overlap_center < std::max(nbr_res_p1.y, nbr_res_p2.y)) {
-                                seg_split_id = _splitResistorAtPt(nbr_res, Point2D<double>(nbr_res_p1.x, overlap_center));
+                                nbr_split_res = nbr_res;
+                                nbr_split_pt = Point2D<double>(nbr_res_p1.x, overlap_center);
                                 break;
                             }
                         }
 
-                        if (nbr_split_id.length() == 0) {
+                        if (!nbr_split_res) {
                             double overlap_left = std::max(nbr_rect.ll.y, seg_rect.ll.y);
                             double overlap_right = std::min(nbr_rect.ur.y, seg_rect.ur.y);
                             for (Resistor *nbr_res : nbr_ptr->getResistors()) {
@@ -972,14 +1012,17 @@ namespace phydb {
                                     
                                     double sub_overlap_center = (std::max(overlap_left, std::min(nbr_res_p1.y, nbr_res_p2.y)) + std::min(overlap_right, std::max(nbr_res_p1.y, nbr_res_p2.y))) /2;
 
-                                    nbr_split_id = _splitResistorAtPt(nbr_res, Point2D<double>(sub_overlap_center, nbr_res_p1.x));
+                                    nbr_split_res = nbr_res;
+                                    nbr_split_pt = Point2D<double>(sub_overlap_center, nbr_res_p1.x);
                                     break;
                                 }
                             }
                         }
 
-                        if (!seg_split_id.empty() && !nbr_split_id.empty()) { // not enough overlap otherwise given model
+                        if (nbr_split_res && seg_split_res) { // not enough overlap otherwise given model
 
+                            std::string seg_split_id = _splitResistorAtPt(seg_split_res, seg_split_pt);
+                            std::string nbr_split_id = _splitResistorAtPt(nbr_split_res, nbr_split_pt);
                             std::unique_ptr<Capacitor> capacitor(new Capacitor(
                                 seg_split_id,
                                 nbr_split_id,
